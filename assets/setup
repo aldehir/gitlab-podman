@@ -1,0 +1,60 @@
+#!/bin/bash
+
+set -e
+
+cat > /etc/yum.repos.d/gitlab.repo <<EOF
+[gitlab_gitlab-ce]
+name=gitlab_gitlab-ce
+baseurl=https://packages.gitlab.com/gitlab/gitlab-ce/el/7/\$basearch
+repo_gpgcheck=1
+gpgcheck=1
+enabled=1
+gpgkey=https://packages.gitlab.com/gitlab/gitlab-ce/gpgkey
+       https://packages.gitlab.com/gitlab/gitlab-ce/gpgkey/gitlab-gitlab-ce-3D645A26AB9FBD22.pub.gpg
+sslverify=1
+sslcacert=/etc/pki/tls/certs/ca-bundle.crt
+metadata_expire=300
+EOF
+
+yum -q makecache -y --disablerepo='*' --enablerepo='gitlab_gitlab-ce'
+
+yum install -y gitlab-ce
+
+# Create sshd daemon
+mkdir -p /opt/gitlab/sv/sshd/supervise /opt/gitlab/sv/sshd/log/supervise
+mkfifo /opt/gitlab/sv/sshd/supervise/ok /opt/gitlab/sv/sshd/log/supervise/ok
+printf "#!/bin/sh\nexec 2>&1\numask 077\nexec /usr/sbin/sshd -D -f /assets/sshd_config -e" > /opt/gitlab/sv/sshd/run
+printf "#!/bin/sh\nexec svlogd -tt /var/log/gitlab/sshd" > /opt/gitlab/sv/sshd/log/run
+chmod a+x /opt/gitlab/sv/sshd/run /opt/gitlab/sv/sshd/log/run
+
+# Remove current gitlab.rb file
+rm -f /etc/gitlab/gitlab.rb
+
+# Patch omnibus package
+sed -i "s/external_url 'GENERATED_EXTERNAL_URL'/# external_url 'GENERATED_EXTERNAL_URL'/" /opt/gitlab/etc/gitlab.rb.template
+sed -i "s/\/etc\/gitlab\/gitlab.rb/\/assets\/gitlab.rb/" /opt/gitlab/embedded/cookbooks/gitlab/recipes/show_config.rb
+sed -i "s/\/etc\/gitlab\/gitlab.rb/\/assets\/gitlab.rb/" /opt/gitlab/embedded/cookbooks/gitlab/recipes/config.rb
+
+# Set install type to docker
+echo 'gitlab-docker' > /opt/gitlab/embedded/service/gitlab-rails/INSTALLATION_TYPE
+
+# Create groups
+groupadd -g 898 git
+groupadd -g 899 gitlab-www
+groupadd -g 897 gitlab-redis
+groupadd -g 896 gitlab-psql
+
+groupadd -g 894 mattermost
+groupadd -g 893 registry
+groupadd -g 892 gitlab-prometheus
+groupadd -g 891 gitlab-consul
+
+# Create accounts
+useradd -m -u 898 -g git -m -s /bin/sh -d /var/opt/gitlab git
+useradd -m -u 899 -g gitlab-www -m -s /bin/false -d /var/opt/gitlab/nginx gitlab-www
+useradd -m -u 897 -g gitlab-redis -m -s /bin/false -d /var/opt/gitlab/redis gitlab-redis
+useradd -m -u 896 -g gitlab-psql -m -s /bin/sh -d /var/opt/gitlab/postgresql gitlab-psql
+useradd -m -u 894 -g mattermost -m -s /bin/sh -d /var/opt/gitlab/mattermost mattermost
+useradd -m -u 893 -g registry -m -s /bin/sh -d /var/opt/gitlab/registry registry
+useradd -m -u 892 -g gitlab-prometheus -m -s /bin/sh -d /var/opt/gitlab/prometheus gitlab-prometheus
+useradd -m -u 891 -g gitlab-consul -m -s /bin/sh -d /var/opt/gitlab/consul gitlab-consul
